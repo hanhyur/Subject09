@@ -47,8 +47,12 @@ protected:
 	void JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount);
 
 	void SetGameState(EGameState InGameState);
+	void BroadcastChatMessage(const FString& InMessage);
 	void BroadcastSystemMessage(const FString& InMessage);
+	void SendTargetedSystemMessage(ABnCPlayerController* TargetPC, const FString& InMessage);
 	void CheckAllPlayersReady();
+
+	void ClearAllNotifications();
 	
 protected:
 	FString SecretNumberString;
@@ -66,4 +70,5 @@ protected:
 	bool bIsGameStartPrompted;
 
 	FTimerHandle TimerHandle_ResetGame;
+	FTimerHandle TimerHandle_ClearNotification;
 };

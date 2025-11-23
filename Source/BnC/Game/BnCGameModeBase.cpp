@@ -127,11 +127,7 @@ void ABnCGameModeBase::ProcessLobbyMessage(ABnCPlayerController* InChattingPlaye
 	else
 	{
 		FString ChatMessage = BnCPS->PlayerNameString + TEXT(": ") + InChatMessageString;
-		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
-		if(IsValid(BnCGS))
-		{
-			BnCGS->MulticastRPCBroadcastChatMessage(ChatMessage);
-		}
+		BroadcastChatMessage(ChatMessage);
 	}
 }
 
@@ -144,11 +140,7 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	if (!PlayingPlayerStates.Contains(BnCPS))
 	{
 		FString ChatMessage = BnCPS->PlayerNameString + TEXT("[Spectator]: ") + InChatMessageString;
-		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
-		if(IsValid(BnCGS))
-		{
-			BnCGS->MulticastRPCBroadcastChatMessage(ChatMessage);
-		}
+		BroadcastChatMessage(ChatMessage);
 		return;
 	}
 	
@@ -156,25 +148,20 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	{
 		// If player has no more guesses, treat as regular chat
 		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
-		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
-		if(IsValid(BnCGS))
-		{
-			BnCGS->MulticastRPCBroadcastChatMessage(ChatMessage);
-		}
+		BroadcastChatMessage(ChatMessage);
 		return;
 	}
 
 	if (IsGuessNumberString(InChatMessageString))
 	{
+		// Broadcast the guess as a chat message first
+		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
+		BroadcastChatMessage(ChatMessage);
+
+		// Then process the result and broadcast as a notification
 		IncreaseGuessCount(InChattingPlayerController);
 		FString ResultString = JudgeResult(SecretNumberString, InChatMessageString);
-		FString FullMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString + TEXT(" -> ") + ResultString;
-		
-		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
-		if(IsValid(BnCGS))
-		{
-			BnCGS->MulticastRPCBroadcastChatMessage(FullMessage);
-		}
+		BroadcastSystemMessage(InChatMessageString + TEXT(" -> ") + ResultString);
 
 		int32 StrikeCount = 0;
 		if (ResultString.Equals(TEXT("3S")))
@@ -187,11 +174,7 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	{
 		// Treat as regular chat during the game
 		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
-		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
-		if(IsValid(BnCGS))
-		{
-			BnCGS->MulticastRPCBroadcastChatMessage(ChatMessage);
-		}
+		BroadcastChatMessage(ChatMessage);
 	}
 }
 
@@ -356,13 +339,36 @@ void ABnCGameModeBase::SetGameState(EGameState InGameState)
 	}
 }
 
-void ABnCGameModeBase::BroadcastSystemMessage(const FString& InMessage)
+void ABnCGameModeBase::BroadcastChatMessage(const FString& InMessage)
 {
 	ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
 	if(IsValid(BnCGS))
 	{
-		BnCGS->MulticastRPCBroadcastChatMessage(TEXT("[System] ") + InMessage);
+		BnCGS->MulticastRPCBroadcastChatMessage(InMessage);
 	}
+}
+
+void ABnCGameModeBase::BroadcastSystemMessage(const FString& InMessage)
+{
+	for (ABnCPlayerController* PC : AllPlayerControllers)
+	{
+		if (IsValid(PC))
+		{
+			PC->NotificationText = FText::FromString(TEXT("[System] ") + InMessage);
+		}
+	}
+
+	GetWorld()->GetTimerManager().SetTimer(TimerHandle_ClearNotification, this, &ABnCGameModeBase::ClearAllNotifications, 3.0f, false);
+}
+
+void ABnCGameModeBase::SendTargetedSystemMessage(ABnCPlayerController* TargetPC, const FString& InMessage)
+{
+	if (IsValid(TargetPC))
+	{
+		TargetPC->NotificationText = FText::FromString(TEXT("[System] ") + InMessage);
+	}
+
+	GetWorld()->GetTimerManager().SetTimer(TimerHandle_ClearNotification, this, &ABnCGameModeBase::ClearAllNotifications, 3.0f, false);
 }
 
 void ABnCGameModeBase::CheckAllPlayersReady()
@@ -375,9 +381,20 @@ void ABnCGameModeBase::CheckAllPlayersReady()
 			if(IsValid(FirstReadyPC))
 			{
 				FString PromptMessage = ReadyPlayerStates[0]->PlayerNameString + TEXT(", 2 or more players are ready. Type 'Go' to start the game with the ready players.");
-				FirstReadyPC->ClientRPC_ReceiveSystemMessage(PromptMessage);
+				SendTargetedSystemMessage(FirstReadyPC, PromptMessage);
 				bIsGameStartPrompted = true;
 			}
+		}
+	}
+}
+
+void ABnCGameModeBase::ClearAllNotifications()
+{
+	for (ABnCPlayerController* PC : AllPlayerControllers)
+	{
+		if (IsValid(PC))
+		{
+			PC->NotificationText = FText::GetEmpty();
 		}
 	}
 }
