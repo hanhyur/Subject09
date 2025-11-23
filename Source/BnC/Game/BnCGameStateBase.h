@@ -15,6 +15,15 @@ class BNC_API ABnCGameStateBase : public AGameStateBase
 	GENERATED_BODY()
 
 public:
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastRPCBroadcastChatMessage(const FString& InMessage);
+
+public:
+	UPROPERTY(Replicated, BlueprintReadOnly)
+	FString CurrentTurnPlayerName;
+
+	UPROPERTY(Replicated, BlueprintReadOnly)
+	float TurnTimeRemaining;
 };

@@ -5,6 +5,15 @@
 
 #include "Kismet/GameplayStatics.h"
 #include "Player/BnCPlayerController.h"
+#include "Net/UnrealNetwork.h"
+
+void ABnCGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ABnCGameStateBase, CurrentTurnPlayerName);
+	DOREPLIFETIME(ABnCGameStateBase, TurnTimeRemaining);
+}
 
 void ABnCGameStateBase::MulticastRPCBroadcastChatMessage_Implementation(const FString& InMessage)
 {

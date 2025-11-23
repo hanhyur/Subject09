@@ -44,7 +44,7 @@ protected:
 
 	void IncreaseGuessCount(ABnCPlayerController* InChattingPlayerController);
 	void ResetGame();
-	void JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount);
+	bool JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount);
 
 	void SetGameState(EGameState InGameState);
 	void BroadcastChatMessage(const FString& InMessage);
@@ -53,6 +53,10 @@ protected:
 	void CheckAllPlayersReady();
 
 	void ClearAllNotifications();
+
+	void StartTurn();
+	void EndTurn();
+	void UpdateTurnTimer();
 	
 protected:
 	FString SecretNumberString;
@@ -69,6 +73,12 @@ protected:
 
 	bool bIsGameStartPrompted;
 
+	int32 CurrentPlayerTurnIndex;
+	bool bHasGuessedThisTurn;
+	float TurnDuration;
+
 	FTimerHandle TimerHandle_ResetGame;
 	FTimerHandle TimerHandle_ClearNotification;
+	FTimerHandle TimerHandle_TurnTimer;
+	FTimerHandle TimerHandle_TurnTimeUpdater;
 };

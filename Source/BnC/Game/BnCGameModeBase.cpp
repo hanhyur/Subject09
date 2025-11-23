@@ -12,6 +12,9 @@ ABnCGameModeBase::ABnCGameModeBase()
 {
 	CurrentGameState = EGameState::Lobby;
 	bIsGameStartPrompted = false;
+	CurrentPlayerTurnIndex = -1;
+	bHasGuessedThisTurn = false;
+	TurnDuration = 30.0f;
 }
 
 void ABnCGameModeBase::OnPostLogin(AController* NewPlayer)
@@ -51,28 +54,46 @@ void ABnCGameModeBase::Logout(AController* Exiting)
 	if(IsValid(BnCPS))
 	{
 		ReadyPlayerStates.Remove(BnCPS);
-		PlayingPlayerStates.Remove(BnCPS);
+		
+		bool bWasPlaying = PlayingPlayerStates.Remove(BnCPS) > 0;
 		
 		FString LogoutMessage = BnCPS->PlayerNameString + TEXT(" has disconnected.");
 		BroadcastSystemMessage(LogoutMessage);
+
+		if(bWasPlaying && CurrentGameState == EGameState::Playing)
+		{
+			if (PlayingPlayerStates.Num() == 1)
+			{
+				// Last player wins
+				ABnCPlayerState* WinnerPS = PlayingPlayerStates[0];
+				if (IsValid(WinnerPS))
+				{
+					FString WinMessage = WinnerPS->PlayerNameString + TEXT(" has won the game as the last player remaining! The answer was ") + SecretNumberString;
+					BroadcastSystemMessage(WinMessage);
+				}
+				SetGameState(EGameState::GameOver);
+				GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+				return;
+			}
+			
+			if (PlayingPlayerStates.Num() > 0)
+			{
+				// If the player who left was the current turn player, end the turn immediately.
+				if(CurrentPlayerTurnIndex >= PlayingPlayerStates.Num())
+				{
+					CurrentPlayerTurnIndex = 0;
+				}
+				EndTurn();
+			}
+			else // No players left
+			{
+				SetGameState(EGameState::GameOver);
+				GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+			}
+		}
 	}
 	
 	AllPlayerControllers.Remove(BnCPlayerController);
-
-	if (CurrentGameState == EGameState::Playing && PlayingPlayerStates.Num() < 2)
-	{
-		if (PlayingPlayerStates.Num() == 1)
-		{
-			ABnCPlayerState* WinnerPS = PlayingPlayerStates[0];
-			if (IsValid(WinnerPS))
-			{
-				FString WinMessage = WinnerPS->PlayerNameString + TEXT(" has won the game. The answer was ") + SecretNumberString;
-				BroadcastSystemMessage(WinMessage);
-			}
-		}
-		SetGameState(EGameState::GameOver);
-		GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
-	}
 }
 
 void ABnCGameModeBase::BeginPlay()
@@ -136,6 +157,13 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	ABnCPlayerState* BnCPS = InChattingPlayerController->GetPlayerState<ABnCPlayerState>();
 	if (!IsValid(BnCPS)) return;
 
+	// Check if it's the player's turn
+	if (!PlayingPlayerStates.IsValidIndex(CurrentPlayerTurnIndex) || PlayingPlayerStates[CurrentPlayerTurnIndex] != BnCPS)
+	{
+		SendTargetedSystemMessage(InChattingPlayerController, TEXT("It's not your turn."));
+		return;
+	}
+
 	// Only players in the current game can make guesses. Others are spectators.
 	if (!PlayingPlayerStates.Contains(BnCPS))
 	{
@@ -146,7 +174,7 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	
 	if (BnCPS->GetCurrentGuessCount() >= BnCPS->GetMaxGuessCount())
 	{
-		// If player has no more guesses, treat as regular chat
+		// This case should ideally not be hit due to draw logic, but as a fallback:
 		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
 		BroadcastChatMessage(ChatMessage);
 		return;
@@ -154,21 +182,25 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 
 	if (IsGuessNumberString(InChatMessageString))
 	{
-		// Broadcast the guess as a chat message first
-		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
-		BroadcastChatMessage(ChatMessage);
-
-		// Then process the result and broadcast as a notification
+		bHasGuessedThisTurn = true;
+		
 		IncreaseGuessCount(InChattingPlayerController);
 		FString ResultString = JudgeResult(SecretNumberString, InChatMessageString);
-		BroadcastSystemMessage(InChatMessageString + TEXT(" -> ") + ResultString);
+		
+		FString FullMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString + TEXT(" -> ") + ResultString;
+		BroadcastChatMessage(FullMessage);
 
 		int32 StrikeCount = 0;
 		if (ResultString.Equals(TEXT("3S")))
 		{
 			StrikeCount = 3;
 		}
-		JudgeGame(InChattingPlayerController, StrikeCount);
+		
+		if (JudgeGame(InChattingPlayerController, StrikeCount) == false)
+		{
+			// If game is not over, end the turn
+			EndTurn();
+		}
 	}
 	else
 	{
@@ -258,11 +290,22 @@ void ABnCGameModeBase::IncreaseGuessCount(ABnCPlayerController* InChattingPlayer
 void ABnCGameModeBase::ResetGame()
 {
 	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_ResetGame);
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_ClearNotification);
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimer);
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimeUpdater);
 	
 	bIsGameStartPrompted = false;
 	SecretNumberString = GenerateSecretNumber();
 	ReadyPlayerStates.Empty();
 	PlayingPlayerStates.Empty();
+	CurrentPlayerTurnIndex = -1;
+
+	ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
+	if(BnCGS)
+	{
+		BnCGS->CurrentTurnPlayerName = TEXT("");
+		BnCGS->TurnTimeRemaining = 0.0f;
+	}
 
 	for (auto It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -282,7 +325,7 @@ void ABnCGameModeBase::ResetGame()
 	SetGameState(EGameState::Lobby);
 }
 
-void ABnCGameModeBase::JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount)
+bool ABnCGameModeBase::JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount)
 {
 	if (InStrikeCount == 3)
 	{
@@ -293,28 +336,30 @@ void ABnCGameModeBase::JudgeGame(ABnCPlayerController* InChattingPlayerControlle
 			BroadcastSystemMessage(WinMessage);
 			SetGameState(EGameState::GameOver);
 			GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+			return true;
 		}
 	}
-	else
+	
+	bool bIsDraw = true;
+	for (ABnCPlayerState* PlayingPS : PlayingPlayerStates)
 	{
-		bool bIsDraw = true;
-		for (ABnCPlayerState* PlayingPS : PlayingPlayerStates)
+		if (IsValid(PlayingPS) && PlayingPS->GetCurrentGuessCount() < PlayingPS->GetMaxGuessCount())
 		{
-			if (IsValid(PlayingPS) && PlayingPS->GetCurrentGuessCount() < PlayingPS->GetMaxGuessCount())
-			{
-				bIsDraw = false;
-				break;
-			}
-		}
-
-		if (bIsDraw)
-		{
-			FString DrawMessage = TEXT("Draw! No one guessed the number. The answer was ") + SecretNumberString;
-			BroadcastSystemMessage(DrawMessage);
-			SetGameState(EGameState::GameOver);
-			GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+			bIsDraw = false;
+			break;
 		}
 	}
+
+	if (bIsDraw)
+	{
+		FString DrawMessage = TEXT("Draw! No one guessed the number. The answer was ") + SecretNumberString;
+		BroadcastSystemMessage(DrawMessage);
+		SetGameState(EGameState::GameOver);
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+		return true;
+	}
+
+	return false;
 }
 
 void ABnCGameModeBase::SetGameState(EGameState InGameState)
@@ -335,7 +380,21 @@ void ABnCGameModeBase::SetGameState(EGameState InGameState)
 			PlayersString += PS->PlayerNameString + TEXT(" ");
 		}
 		
-		BroadcastSystemMessage(FString::Printf(TEXT("Game Start! Players: %s. Guess the 3-digit number."), *PlayersString));
+		BroadcastSystemMessage(FString::Printf(TEXT("Game Start! Players: %s."), *PlayersString));
+		
+		CurrentPlayerTurnIndex = -1; // StartTurn will advance it to 0
+		EndTurn(); // Start the first turn
+	}
+	else if (InGameState == EGameState::GameOver)
+	{
+		GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimer);
+		GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimeUpdater);
+		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
+		if(BnCGS)
+		{
+			BnCGS->CurrentTurnPlayerName = TEXT("");
+			BnCGS->TurnTimeRemaining = 0.0f;
+		}
 	}
 }
 
@@ -396,5 +455,75 @@ void ABnCGameModeBase::ClearAllNotifications()
 		{
 			PC->NotificationText = FText::GetEmpty();
 		}
+	}
+}
+
+void ABnCGameModeBase::StartTurn()
+{
+	if (!PlayingPlayerStates.IsValidIndex(CurrentPlayerTurnIndex))
+	{
+		return;
+	}
+
+	bHasGuessedThisTurn = false;
+	ABnCPlayerState* CurrentPlayerPS = PlayingPlayerStates[CurrentPlayerTurnIndex];
+	
+	ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
+	if (BnCGS && CurrentPlayerPS)
+	{
+		BnCGS->CurrentTurnPlayerName = CurrentPlayerPS->PlayerNameString;
+		BnCGS->TurnTimeRemaining = TurnDuration;
+
+		BroadcastSystemMessage(FString::Printf(TEXT("It's %s's turn! (%d seconds)"), *BnCGS->CurrentTurnPlayerName, (int32)TurnDuration));
+
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle_TurnTimer, this, &ABnCGameModeBase::EndTurn, TurnDuration, false);
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle_TurnTimeUpdater, this, &ABnCGameModeBase::UpdateTurnTimer, 1.0f, true);
+	}
+}
+
+void ABnCGameModeBase::EndTurn()
+{
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimer);
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimeUpdater);
+
+	if (CurrentGameState != EGameState::Playing) return;
+
+	if (PlayingPlayerStates.IsValidIndex(CurrentPlayerTurnIndex) && bHasGuessedThisTurn == false)
+	{
+		ABnCPlayerState* MissedTurnPS = PlayingPlayerStates[CurrentPlayerTurnIndex];
+		if (MissedTurnPS)
+		{
+			ABnCPlayerController* MissedTurnPC = Cast<ABnCPlayerController>(MissedTurnPS->GetPlayerController());
+			if (MissedTurnPC)
+			{
+				IncreaseGuessCount(MissedTurnPC);
+				BroadcastSystemMessage(FString::Printf(TEXT("%s missed their turn!"), *MissedTurnPS->PlayerNameString));
+				if (JudgeGame(nullptr, 0))
+				{
+					return; // Game ended in a draw
+				}
+			}
+		}
+	}
+
+	if (PlayingPlayerStates.Num() > 0)
+	{
+		CurrentPlayerTurnIndex = (CurrentPlayerTurnIndex + 1) % PlayingPlayerStates.Num();
+		StartTurn();
+	}
+	else
+	{
+		// No one left, end the game
+		SetGameState(EGameState::GameOver);
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle_ResetGame, this, &ABnCGameModeBase::ResetGame, 5.0f, false);
+	}
+}
+
+void ABnCGameModeBase::UpdateTurnTimer()
+{
+	ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
+	if (BnCGS)
+	{
+		BnCGS->TurnTimeRemaining = FMath::Max(0.0f, BnCGS->TurnTimeRemaining - 1.0f);
 	}
 }
