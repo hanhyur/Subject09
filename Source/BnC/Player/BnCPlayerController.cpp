@@ -111,3 +111,7 @@ void ABnCPlayerController::GetLifetimeReplicatedProps(TArray<class FLifetimeProp
 	DOREPLIFETIME(ThisClass, NotificationText);
 }
 
+void ABnCPlayerController::ClientRPC_ReceiveSystemMessage_Implementation(const FString& InMessage)
+{
+	PrintChatMessageString(TEXT("[System] ") + InMessage);
+}

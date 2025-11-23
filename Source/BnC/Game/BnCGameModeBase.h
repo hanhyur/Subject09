@@ -60,5 +60,10 @@ protected:
 	UPROPERTY()
 	TArray<TObjectPtr<ABnCPlayerState>> ReadyPlayerStates;
 
+	UPROPERTY()
+	TArray<TObjectPtr<ABnCPlayerState>> PlayingPlayerStates;
+
+	bool bIsGameStartPrompted;
+
 	FTimerHandle TimerHandle_ResetGame;
 };

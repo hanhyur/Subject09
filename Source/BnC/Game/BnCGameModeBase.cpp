@@ -11,6 +11,7 @@
 ABnCGameModeBase::ABnCGameModeBase()
 {
 	CurrentGameState = EGameState::Lobby;
+	bIsGameStartPrompted = false;
 }
 
 void ABnCGameModeBase::OnPostLogin(AController* NewPlayer)
@@ -50,6 +51,7 @@ void ABnCGameModeBase::Logout(AController* Exiting)
 	if(IsValid(BnCPS))
 	{
 		ReadyPlayerStates.Remove(BnCPS);
+		PlayingPlayerStates.Remove(BnCPS);
 		
 		FString LogoutMessage = BnCPS->PlayerNameString + TEXT(" has disconnected.");
 		BroadcastSystemMessage(LogoutMessage);
@@ -57,19 +59,15 @@ void ABnCGameModeBase::Logout(AController* Exiting)
 	
 	AllPlayerControllers.Remove(BnCPlayerController);
 
-	if (CurrentGameState == EGameState::Playing && GetNumPlayers() < 2)
+	if (CurrentGameState == EGameState::Playing && PlayingPlayerStates.Num() < 2)
 	{
-		if (GetNumPlayers() == 1)
+		if (PlayingPlayerStates.Num() == 1)
 		{
-			ABnCPlayerController* RemainingPlayer = Cast<ABnCPlayerController>(UGameplayStatics::GetPlayerController(GetWorld(), 0));
-			if(RemainingPlayer)
+			ABnCPlayerState* WinnerPS = PlayingPlayerStates[0];
+			if (IsValid(WinnerPS))
 			{
-				ABnCPlayerState* WinnerPS = RemainingPlayer->GetPlayerState<ABnCPlayerState>();
-				if (IsValid(WinnerPS))
-				{
-					FString WinMessage = WinnerPS->PlayerNameString + TEXT(" has won the game. The answer was ") + SecretNumberString;
-					BroadcastSystemMessage(WinMessage);
-				}
+				FString WinMessage = WinnerPS->PlayerNameString + TEXT(" has won the game. The answer was ") + SecretNumberString;
+				BroadcastSystemMessage(WinMessage);
 			}
 		}
 		SetGameState(EGameState::GameOver);
@@ -121,14 +119,14 @@ void ABnCGameModeBase::ProcessLobbyMessage(ABnCPlayerController* InChattingPlaye
 	}
 	else if (InChatMessageString.Equals(TEXT("Go"), ESearchCase::IgnoreCase))
 	{
-		if (GetNumPlayers() >= 2 && ReadyPlayerStates.Num() == GetNumPlayers() && ReadyPlayerStates.IsValidIndex(0) && ReadyPlayerStates[0] == BnCPS)
+		if (ReadyPlayerStates.Num() >= 2 && ReadyPlayerStates.IsValidIndex(0) && ReadyPlayerStates[0] == BnCPS)
 		{
 			SetGameState(EGameState::Playing);
 		}
 	}
 	else
 	{
-		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
+		FString ChatMessage = BnCPS->PlayerNameString + TEXT(": ") + InChatMessageString;
 		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
 		if(IsValid(BnCGS))
 		{
@@ -140,7 +138,21 @@ void ABnCGameModeBase::ProcessLobbyMessage(ABnCPlayerController* InChattingPlaye
 void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPlayerController, const FString& InChatMessageString)
 {
 	ABnCPlayerState* BnCPS = InChattingPlayerController->GetPlayerState<ABnCPlayerState>();
-	if (!IsValid(BnCPS) || BnCPS->GetCurrentGuessCount() >= BnCPS->GetMaxGuessCount())
+	if (!IsValid(BnCPS)) return;
+
+	// Only players in the current game can make guesses. Others are spectators.
+	if (!PlayingPlayerStates.Contains(BnCPS))
+	{
+		FString ChatMessage = BnCPS->PlayerNameString + TEXT("[Spectator]: ") + InChatMessageString;
+		ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
+		if(IsValid(BnCGS))
+		{
+			BnCGS->MulticastRPCBroadcastChatMessage(ChatMessage);
+		}
+		return;
+	}
+	
+	if (BnCPS->GetCurrentGuessCount() >= BnCPS->GetMaxGuessCount())
 	{
 		// If player has no more guesses, treat as regular chat
 		FString ChatMessage = BnCPS->GetPlayerInfoString() + TEXT(": ") + InChatMessageString;
@@ -264,8 +276,10 @@ void ABnCGameModeBase::ResetGame()
 {
 	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_ResetGame);
 	
+	bIsGameStartPrompted = false;
 	SecretNumberString = GenerateSecretNumber();
 	ReadyPlayerStates.Empty();
+	PlayingPlayerStates.Empty();
 
 	for (auto It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -301,17 +315,12 @@ void ABnCGameModeBase::JudgeGame(ABnCPlayerController* InChattingPlayerControlle
 	else
 	{
 		bool bIsDraw = true;
-		for (auto It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		for (ABnCPlayerState* PlayingPS : PlayingPlayerStates)
 		{
-			APlayerController* PC = It->Get();
-			if(IsValid(PC))
+			if (IsValid(PlayingPS) && PlayingPS->GetCurrentGuessCount() < PlayingPS->GetMaxGuessCount())
 			{
-				ABnCPlayerState* BnCPS = PC->GetPlayerState<ABnCPlayerState>();
-				if (IsValid(BnCPS) && BnCPS->GetCurrentGuessCount() < BnCPS->GetMaxGuessCount())
-				{
-					bIsDraw = false;
-					break;
-				}
+				bIsDraw = false;
+				break;
 			}
 		}
 
@@ -331,8 +340,19 @@ void ABnCGameModeBase::SetGameState(EGameState InGameState)
 
 	if (CurrentGameState == EGameState::Playing)
 	{
+		PlayingPlayerStates = ReadyPlayerStates;
+		ReadyPlayerStates.Empty();
+		bIsGameStartPrompted = false;
+		
 		SecretNumberString = GenerateSecretNumber();
-		BroadcastSystemMessage(TEXT("Game Start! Guess the 3-digit number."));
+
+		FString PlayersString;
+		for(ABnCPlayerState* PS : PlayingPlayerStates)
+		{
+			PlayersString += PS->PlayerNameString + TEXT(" ");
+		}
+		
+		BroadcastSystemMessage(FString::Printf(TEXT("Game Start! Players: %s. Guess the 3-digit number."), *PlayersString));
 	}
 }
 
@@ -347,12 +367,17 @@ void ABnCGameModeBase::BroadcastSystemMessage(const FString& InMessage)
 
 void ABnCGameModeBase::CheckAllPlayersReady()
 {
-	if (GetNumPlayers() >= 2 && ReadyPlayerStates.Num() == GetNumPlayers())
+	if (ReadyPlayerStates.Num() >= 2 && !bIsGameStartPrompted)
 	{
 		if (ReadyPlayerStates.IsValidIndex(0) && IsValid(ReadyPlayerStates[0]))
 		{
-			FString PromptMessage = ReadyPlayerStates[0]->PlayerNameString + TEXT(", all players are ready. Type 'Go' to start the game.");
-			BroadcastSystemMessage(PromptMessage);
+			ABnCPlayerController* FirstReadyPC = Cast<ABnCPlayerController>(ReadyPlayerStates[0]->GetPlayerController());
+			if(IsValid(FirstReadyPC))
+			{
+				FString PromptMessage = ReadyPlayerStates[0]->PlayerNameString + TEXT(", 2 or more players are ready. Type 'Go' to start the game with the ready players.");
+				FirstReadyPC->ClientRPC_ReceiveSystemMessage(PromptMessage);
+				bIsGameStartPrompted = true;
+			}
 		}
 	}
 }

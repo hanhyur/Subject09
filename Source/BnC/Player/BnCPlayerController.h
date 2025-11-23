@@ -28,6 +28,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientRPCPrintChatMessageString(const FString& InChatMessageString);
 
+	UFUNCTION(Client, Reliable)
+	void ClientRPC_ReceiveSystemMessage(const FString& InMessage);
+
 	UFUNCTION(Server, Reliable)
 	void ServerRPCPrintChatMessageString(const FString& InChatMessageString);
 
