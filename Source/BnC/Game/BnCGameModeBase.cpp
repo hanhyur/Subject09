@@ -12,6 +12,7 @@ ABnCGameModeBase::ABnCGameModeBase()
 {
 	CurrentGameState = EGameState::Lobby;
 	bIsGameStartPrompted = false;
+	InitialPlayerCount = 0;
 	CurrentPlayerTurnIndex = -1;
 	bHasGuessedThisTurn = false;
 	TurnDuration = 30.0f;
@@ -62,9 +63,9 @@ void ABnCGameModeBase::Logout(AController* Exiting)
 
 		if(bWasPlaying && CurrentGameState == EGameState::Playing)
 		{
-			if (PlayingPlayerStates.Num() == 1)
+			if (InitialPlayerCount > 1 && PlayingPlayerStates.Num() == 1)
 			{
-				// Last player wins
+				// Last player wins in a multiplayer game
 				ABnCPlayerState* WinnerPS = PlayingPlayerStates[0];
 				if (IsValid(WinnerPS))
 				{
@@ -140,7 +141,7 @@ void ABnCGameModeBase::ProcessLobbyMessage(ABnCPlayerController* InChattingPlaye
 	}
 	else if (InChatMessageString.Equals(TEXT("Go"), ESearchCase::IgnoreCase))
 	{
-		if (ReadyPlayerStates.Num() >= 2 && ReadyPlayerStates.IsValidIndex(0) && ReadyPlayerStates[0] == BnCPS)
+		if (ReadyPlayerStates.Num() >= 1 && ReadyPlayerStates.IsValidIndex(0) && ReadyPlayerStates[0] == BnCPS)
 		{
 			SetGameState(EGameState::Playing);
 		}
@@ -157,18 +158,19 @@ void ABnCGameModeBase::ProcessPlayingMessage(ABnCPlayerController* InChattingPla
 	ABnCPlayerState* BnCPS = InChattingPlayerController->GetPlayerState<ABnCPlayerState>();
 	if (!IsValid(BnCPS)) return;
 
-	// Check if it's the player's turn
-	if (!PlayingPlayerStates.IsValidIndex(CurrentPlayerTurnIndex) || PlayingPlayerStates[CurrentPlayerTurnIndex] != BnCPS)
+	// First, check if the player is a participant or a spectator.
+	if (!PlayingPlayerStates.Contains(BnCPS))
 	{
-		SendTargetedSystemMessage(InChattingPlayerController, TEXT("It's not your turn."));
+		// This player is a spectator. Just broadcast their message.
+		FString ChatMessage = BnCPS->PlayerNameString + TEXT("[Spectator]: ") + InChatMessageString;
+		BroadcastChatMessage(ChatMessage);
 		return;
 	}
 
-	// Only players in the current game can make guesses. Others are spectators.
-	if (!PlayingPlayerStates.Contains(BnCPS))
+	// The player is a participant. Now, check if it's their turn.
+	if (!PlayingPlayerStates.IsValidIndex(CurrentPlayerTurnIndex) || PlayingPlayerStates[CurrentPlayerTurnIndex] != BnCPS)
 	{
-		FString ChatMessage = BnCPS->PlayerNameString + TEXT("[Spectator]: ") + InChatMessageString;
-		BroadcastChatMessage(ChatMessage);
+		SendTargetedSystemMessage(InChattingPlayerController, TEXT("It's not your turn."));
 		return;
 	}
 	
@@ -293,11 +295,13 @@ void ABnCGameModeBase::ResetGame()
 	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_ClearNotification);
 	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimer);
 	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_TurnTimeUpdater);
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle_NextTurn);
 	
 	bIsGameStartPrompted = false;
 	SecretNumberString = GenerateSecretNumber();
 	ReadyPlayerStates.Empty();
 	PlayingPlayerStates.Empty();
+	InitialPlayerCount = 0;
 	CurrentPlayerTurnIndex = -1;
 
 	ABnCGameStateBase* BnCGS = GetGameState<ABnCGameStateBase>();
@@ -327,7 +331,7 @@ void ABnCGameModeBase::ResetGame()
 
 bool ABnCGameModeBase::JudgeGame(ABnCPlayerController* InChattingPlayerController, int InStrikeCount)
 {
-	if (InStrikeCount == 3)
+	if (InStrikeCount == 3 && InChattingPlayerController != nullptr)
 	{
 		ABnCPlayerState* WinnerPS = InChattingPlayerController->GetPlayerState<ABnCPlayerState>();
 		if (IsValid(WinnerPS))
@@ -371,6 +375,7 @@ void ABnCGameModeBase::SetGameState(EGameState InGameState)
 		PlayingPlayerStates = ReadyPlayerStates;
 		ReadyPlayerStates.Empty();
 		bIsGameStartPrompted = false;
+		InitialPlayerCount = PlayingPlayerStates.Num();
 		
 		SecretNumberString = GenerateSecretNumber();
 
@@ -432,14 +437,14 @@ void ABnCGameModeBase::SendTargetedSystemMessage(ABnCPlayerController* TargetPC,
 
 void ABnCGameModeBase::CheckAllPlayersReady()
 {
-	if (ReadyPlayerStates.Num() >= 2 && !bIsGameStartPrompted)
+	if (ReadyPlayerStates.Num() >= 1 && !bIsGameStartPrompted)
 	{
 		if (ReadyPlayerStates.IsValidIndex(0) && IsValid(ReadyPlayerStates[0]))
 		{
 			ABnCPlayerController* FirstReadyPC = Cast<ABnCPlayerController>(ReadyPlayerStates[0]->GetPlayerController());
 			if(IsValid(FirstReadyPC))
 			{
-				FString PromptMessage = ReadyPlayerStates[0]->PlayerNameString + TEXT(", 2 or more players are ready. Type 'Go' to start the game with the ready players.");
+				FString PromptMessage = ReadyPlayerStates[0]->PlayerNameString + TEXT(", you are the first to ready up. Type 'Go' to start the game with the ready players.");
 				SendTargetedSystemMessage(FirstReadyPC, PromptMessage);
 				bIsGameStartPrompted = true;
 			}
@@ -497,7 +502,9 @@ void ABnCGameModeBase::EndTurn()
 			if (MissedTurnPC)
 			{
 				IncreaseGuessCount(MissedTurnPC);
-				BroadcastSystemMessage(FString::Printf(TEXT("%s missed their turn!"), *MissedTurnPS->PlayerNameString));
+				FString MissedTurnMessage = MissedTurnPS->GetPlayerInfoString() + TEXT(" missed their turn!");
+				BroadcastChatMessage(MissedTurnMessage);
+				
 				if (JudgeGame(nullptr, 0))
 				{
 					return; // Game ended in a draw
@@ -509,7 +516,7 @@ void ABnCGameModeBase::EndTurn()
 	if (PlayingPlayerStates.Num() > 0)
 	{
 		CurrentPlayerTurnIndex = (CurrentPlayerTurnIndex + 1) % PlayingPlayerStates.Num();
-		StartTurn();
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle_NextTurn, this, &ABnCGameModeBase::PrepareNextTurn, 2.0f, false);
 	}
 	else
 	{
@@ -526,4 +533,9 @@ void ABnCGameModeBase::UpdateTurnTimer()
 	{
 		BnCGS->TurnTimeRemaining = FMath::Max(0.0f, BnCGS->TurnTimeRemaining - 1.0f);
 	}
+}
+
+void ABnCGameModeBase::PrepareNextTurn()
+{
+	StartTurn();
 }

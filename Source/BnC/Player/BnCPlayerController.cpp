@@ -10,6 +10,8 @@
 #include "Game/BnCGameModeBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "BnCPlayerState.h"
+#include "Components/EditableTextBox.h"
+#include "Components/InputComponent.h"
 #include "Net/UnrealNetwork.h"
 
 ABnCPlayerController::ABnCPlayerController()
@@ -25,9 +27,6 @@ void ABnCPlayerController::BeginPlay()
 	{
 		return;
 	}
-
-	FInputModeUIOnly InputModeUIOnly;
-	SetInputMode(InputModeUIOnly);
 
 	if (IsValid(ChatInputWidgetClass) == true)
 	{
@@ -47,6 +46,39 @@ void ABnCPlayerController::BeginPlay()
 		{
 			NotificationTextWidgetInstance->AddToViewport();
 		}
+	}
+
+	if (IsValid(TurnInfoWidgetClass) == true)
+	{
+		TurnInfoWidgetInstance = CreateWidget<UUserWidget>(this, TurnInfoWidgetClass);
+
+		if (IsValid(TurnInfoWidgetInstance) == true)
+		{
+			TurnInfoWidgetInstance->AddToViewport();
+		}
+	}
+
+	// Set to GameAndUI mode and focus chat input by default.
+	FocusChatInput();
+}
+
+void ABnCPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+	if (InputComponent)
+	{
+		InputComponent->BindAction("Chat", IE_Pressed, this, &ABnCPlayerController::FocusChatInput);
+	}
+}
+
+void ABnCPlayerController::FocusChatInput()
+{
+	if (IsValid(ChatInputWidgetInstance) && IsValid(ChatInputWidgetInstance->EditableTextBox_ChatInput))
+	{
+		FInputModeGameAndUI InputMode;
+		InputMode.SetWidgetToFocus(ChatInputWidgetInstance->EditableTextBox_ChatInput->TakeWidget());
+		SetInputMode(InputMode);
+		bShowMouseCursor = true;
 	}
 }
 

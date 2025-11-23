@@ -57,6 +57,7 @@ protected:
 	void StartTurn();
 	void EndTurn();
 	void UpdateTurnTimer();
+	void PrepareNextTurn();
 	
 protected:
 	FString SecretNumberString;
@@ -73,6 +74,7 @@ protected:
 
 	bool bIsGameStartPrompted;
 
+	int32 InitialPlayerCount;
 	int32 CurrentPlayerTurnIndex;
 	bool bHasGuessedThisTurn;
 	float TurnDuration;
@@ -81,4 +83,5 @@ protected:
 	FTimerHandle TimerHandle_ClearNotification;
 	FTimerHandle TimerHandle_TurnTimer;
 	FTimerHandle TimerHandle_TurnTimeUpdater;
+	FTimerHandle TimerHandle_NextTurn;
 };

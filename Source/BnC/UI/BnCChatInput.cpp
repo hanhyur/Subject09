@@ -40,9 +40,15 @@ void UBnCChatInput::OnChatInputTextCommitted(const FText& Text, ETextCommit::Typ
 
 			if (IsValid(OwningBnCPlayerController) == true)
 			{
-				OwningBnCPlayerController->SetChatMessageString(Text.ToString());
-
+				if (Text.IsEmpty() == false)
+				{
+					OwningBnCPlayerController->SetChatMessageString(Text.ToString());
+				}
+				
 				EditableTextBox_ChatInput->SetText(FText());
+
+				// Re-focus the chat input to allow for continuous chatting.
+				OwningBnCPlayerController->FocusChatInput();
 			}
 		}
 	}

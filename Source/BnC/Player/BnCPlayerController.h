@@ -20,6 +20,7 @@ public:
 	ABnCPlayerController();
 	
 	virtual void BeginPlay() override;
+	virtual void SetupInputComponent() override;
 
 	void SetChatMessageString(const FString& InChatMessageString);
 
@@ -32,6 +33,8 @@ public:
 	void ServerRPCPrintChatMessageString(const FString& InChatMessageString);
 
 	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
+
+	void FocusChatInput();
 	
 protected:
 	UPROPERTY(EditDefaultsOnly)
@@ -47,6 +50,12 @@ protected:
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> NotificationTextWidgetInstance;
+
+	UPROPERTY(EditDefaultsOnly)
+	TSubclassOf<UUserWidget> TurnInfoWidgetClass;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> TurnInfoWidgetInstance;
 
 public:
 	UPROPERTY(Replicated, BlueprintReadOnly)
